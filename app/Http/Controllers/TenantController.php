@@ -73,8 +73,8 @@ class TenantController extends Controller
 
     protected function getCurrentTenant(): Tenant
     {
-        return request()->attributes->get('tenant')
-            ?? Auth::guard('web')->user()
+        return Auth::guard('web')->user()
+            ?? request()->attributes->get('tenant')
             ?? app(\App\Services\TenantManager::class)->resolveTenant(request());
     }
 

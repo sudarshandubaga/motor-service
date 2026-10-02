@@ -18,12 +18,31 @@ class ResolveTenantByDomain
     /**
      * Handle an incoming request and bind tenant from domain.
      * Shows a 404 page if domain does not match any registered tenant.
+     * Unauthenticated visitors are NOT automatically logged in.
      */
     public function handle(Request $request, Closure $next): Response
     {
+        // 1. If user is already authenticated via session, bind the authenticated tenant
+        if (Auth::guard('web')->check()) {
+            $authenticatedTenant = Auth::guard('web')->user();
+            $request->attributes->set('tenant', $authenticatedTenant);
+            $request->attributes->set('domain_tenant', $authenticatedTenant);
+
+            if ($request->hasSession()) {
+                $request->session()->put('tenant_id', $authenticatedTenant->id);
+                $request->session()->put('tenant_domain', $authenticatedTenant->domain_name);
+            }
+
+            view()->share('currentTenant', $authenticatedTenant);
+
+            return $next($request);
+        }
+
+        // 2. For unauthenticated guests, resolve the domain tenant for station branding
         $tenant = $this->tenantManager->resolveTenant($request);
 
-        if (! $tenant) {
+        // If domain is not matched to any tenant in DB (and not public auth endpoints)
+        if (! $tenant && ! $request->is('api/login') && ! $request->is('api/me') && ! $request->is('api/forgot-password') && ! $request->is('api/reset-password')) {
             if ($request->expectsJson() || $request->is('api/*')) {
                 return response()->json([
                     'error' => 'Garage Not Found',
@@ -37,19 +56,16 @@ class ResolveTenantByDomain
             ], 404);
         }
 
-        // Set in request attributes and session
-        $request->attributes->set('tenant', $tenant);
+        if ($tenant) {
+            // Provide domain context for public station branding without authenticating
+            $request->attributes->set('domain_tenant', $tenant);
+            $request->attributes->set('tenant', $tenant);
 
-        if ($request->hasSession()) {
-            $request->session()->put('tenant_id', $tenant->id);
-            $request->session()->put('tenant_domain', $tenant->domain_name);
+            view()->share('currentTenant', $tenant);
         }
 
-        // Associate user to session auth guard
-        Auth::guard('web')->setUser($tenant);
-
-        // Share to Blade templates
-        view()->share('currentTenant', $tenant);
+        // NOTE: We deliberately DO NOT call Auth::guard('web')->setUser($tenant) here!
+        // Guests MUST supply valid email and password credentials to log in.
 
         return $next($request);
     }

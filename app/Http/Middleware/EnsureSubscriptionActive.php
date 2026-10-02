@@ -21,8 +21,8 @@ class EnsureSubscriptionActive
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $tenant = $request->attributes->get('tenant')
-            ?? Auth::guard('web')->user()
+        $tenant = Auth::guard('web')->user()
+            ?? $request->attributes->get('tenant')
             ?? $this->tenantManager->resolveTenant($request);
 
         if (! $tenant instanceof Tenant) {

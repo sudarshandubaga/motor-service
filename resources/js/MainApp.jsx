@@ -13,6 +13,7 @@ import InvoiceReceiptModal from './components/InvoiceReceiptModal';
 import AuthModals from './components/AuthModals';
 import SubscriptionModal from './components/SubscriptionModal';
 import SubscriptionLockScreen from './components/SubscriptionLockScreen';
+import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
 import Toast from './components/Toast';
 import {
@@ -36,6 +37,10 @@ import {
 
 export default function MainApp() {
   const [currentTab, setCurrentTab] = useState('pos'); // Start directly on POS for swift billing
+
+  // Authentication State
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [domainInfo, setDomainInfo] = useState(null);
 
   // Global State for the active tenant resolved from domain
   const [tenant, setTenant] = useState(null);
@@ -79,12 +84,45 @@ export default function MainApp() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Fetch all domain-scoped data
+  // Axios response interceptor: kick to login if 401 Unauthorized received
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response && error.response.status === 401) {
+          setIsAuthenticated(false);
+          setTenant(null);
+          setStats(null);
+          setItems([]);
+          setCustomers([]);
+          setSales([]);
+          setCategories([]);
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => axios.interceptors.response.eject(interceptor);
+  }, []);
+
+  // Fetch all domain-scoped data when authenticated
   const fetchData = useCallback(async () => {
     try {
       const meRes = await axios.get('/api/me');
+
+      // Check if user is authenticated
+      if (!meRes.data.authenticated || !meRes.data.tenant) {
+        setIsAuthenticated(false);
+        setTenant(null);
+        setDomainInfo(meRes.data.domain_info || null);
+        setIsLoading(false);
+        return;
+      }
+
+      // User is verified authenticated
       const currentTenant = meRes.data.tenant;
       setTenant(currentTenant);
+      setIsAuthenticated(true);
 
       // When subscription is expired, all functionality is locked
       if (currentTenant?.is_expired) {
@@ -107,7 +145,9 @@ export default function MainApp() {
       setCategories(catsRes.data.categories || []);
     } catch (err) {
       console.error('Failed to load application data:', err);
-      addToast('Error loading garage data', 'error');
+      if (err.response?.status !== 401) {
+        addToast('Error loading garage workstation data', 'error');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -282,10 +322,11 @@ export default function MainApp() {
   const handleLogin = async (credentials) => {
     try {
       const res = await axios.post('/api/login', credentials);
-      addToast('Logged in successfully!');
+      setTenant(res.data.tenant);
+      setIsAuthenticated(true);
+      addToast(`Welcome back, ${res.data.tenant?.name || 'Admin'}!`);
       await fetchData();
     } catch (err) {
-      addToast(err.response?.data?.message || 'Login failed', 'error');
       throw err;
     }
   };
@@ -317,6 +358,8 @@ export default function MainApp() {
   const handleResetPassword = async (payload) => {
     try {
       const res = await axios.post('/api/reset-password', payload);
+      setTenant(res.data.tenant);
+      setIsAuthenticated(true);
       addToast(res.data.message || 'Password reset successfully!');
       await fetchData();
     } catch (err) {
@@ -328,13 +371,21 @@ export default function MainApp() {
   const handleLogout = async () => {
     try {
       await axios.post('/api/logout');
-      addToast('Logged out');
-      setLoginModalOpen(true);
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsAuthenticated(false);
+      setTenant(null);
+      setStats(null);
+      setItems([]);
+      setCustomers([]);
+      setSales([]);
+      setCategories([]);
+      addToast('Logged out of workstation', 'info');
     }
   };
 
+  // Initial Loading Splash
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300 gap-4">
@@ -343,8 +394,23 @@ export default function MainApp() {
         </div>
         <div className="flex items-center gap-2.5 font-bold text-sm text-slate-200">
           <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-          <span>Starting {tenant?.name || 'MotoService Pro'} Station...</span>
+          <span>Verifying {domainInfo?.name || 'MotoService Pro'} Station Access...</span>
         </div>
+      </div>
+    );
+  }
+
+  // MUST NOT ACCESS WITHOUT LOGIN: If unauthenticated, render ONLY the Login Screen!
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 font-sans">
+        <LoginScreen
+          onLogin={handleLogin}
+          onForgotPassword={handleForgotPassword}
+          onResetPassword={handleResetPassword}
+          domainInfo={domainInfo}
+        />
+        <Toast toasts={toasts} onDismiss={dismissToast} />
       </div>
     );
   }
@@ -392,7 +458,7 @@ export default function MainApp() {
         onOpenSettings={() => setSettingsModalOpen(true)}
         onOpenChangePassword={() => setChangePasswordModalOpen(true)}
         onLogout={handleLogout}
-        onOpenLogin={() => setLoginModalOpen(true)}
+        onOpenLogin={() => {}}
       />
 
       {/* Sub-Header Context Bar */}
@@ -576,9 +642,9 @@ export default function MainApp() {
         isSaving={isSavingSettings}
       />
 
-      {/* Auth Modals: Login, Change Password, Forgot/Reset Password */}
+      {/* Auth Modals: Change Password */}
       <AuthModals
-        loginOpen={loginModalOpen}
+        loginOpen={false}
         changePasswordOpen={changePasswordModalOpen}
         forgotPasswordOpen={forgotPasswordModalOpen}
         onCloseAll={() => {

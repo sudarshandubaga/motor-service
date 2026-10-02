@@ -14,7 +14,8 @@ use Illuminate\Support\Str;
 class AuthController extends Controller
 {
     /**
-     * Authenticate tenant login.
+     * Authenticate tenant login via email and password.
+     * The garage domain is automatically resolved from the URL/Host.
      */
     public function login(Request $request): JsonResponse
     {
@@ -23,25 +24,69 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $tenant = Tenant::where('email', $credentials['email'])->first();
+        // Automatically resolve domain from the URL (host / subdomain / query / attributes)
+        $resolvedTenant = $request->attributes->get('domain_tenant')
+            ?? app(\App\Services\TenantManager::class)->resolveTenant($request);
 
-        if (! $tenant || ! Hash::check($credentials['password'], $tenant->password)) {
+        $domain = $resolvedTenant?->domain_name;
+
+        if (!$domain) {
+            return response()->json([
+                'message' => 'No motor service tenant could be identified from this URL.',
+            ], 404);
+        }
+
+        // Query tenant matching the domain from the URL and the email provided
+        $tenant = Tenant::where('domain_name', $domain)
+            ->where('email', $credentials['email'])
+            ->first();
+
+        if (!$tenant) {
+            // Check if tenant exists under another domain
+            $otherTenant = Tenant::where('email', $credentials['email'])->first();
+            if ($otherTenant) {
+                return response()->json([
+                    'message' => "Wrong credentials! Please check your email and password.",
+                    'errors' => ['email' => ["Login failed! Email does not exists."]],
+                ], 422);
+            }
+
+            return response()->json([
+                'message' => 'Invalid email or password credentials for this garage.',
+            ], 422);
+        }
+
+        if (!Hash::check($credentials['password'], $tenant->password)) {
             return response()->json([
                 'message' => 'Invalid email or password credentials.',
             ], 422);
         }
 
+        if (!$tenant->is_active) {
+            return response()->json([
+                'message' => 'Your garage account is suspended or inactive. Please contact administration.',
+            ], 403);
+        }
+
         Auth::guard('web')->login($tenant, $request->boolean('remember'));
         $request->session()->regenerate();
+
+        if ($request->hasSession()) {
+            $request->session()->put('tenant_id', $tenant->id);
+            $request->session()->put('tenant_domain', $tenant->domain_name);
+        }
 
         return response()->json([
             'message' => 'Login successful',
             'tenant' => $tenant->fresh(),
+            'authenticated' => true,
         ]);
     }
 
+
+
     /**
-     * Log out the current tenant.
+     * Log out the current tenant and destroy session.
      */
     public function logout(Request $request): JsonResponse
     {
@@ -51,21 +96,38 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Logged out successfully',
+            'authenticated' => false,
         ]);
     }
 
     /**
      * Get current authenticated tenant info.
+     * Returns authenticated: false if no tenant is logged in.
      */
     public function me(Request $request): JsonResponse
     {
-        $tenant = $request->attributes->get('tenant')
-            ?? Auth::guard('web')->user()
-            ?? app(\App\Services\TenantManager::class)->resolveTenant($request);
+        $tenant = Auth::guard('web')->user();
+
+        if (!$tenant) {
+            $domainTenant = $request->attributes->get('domain_tenant')
+                ?? $request->attributes->get('tenant')
+                ?? app(\App\Services\TenantManager::class)->resolveTenant($request);
+
+            return response()->json([
+                'authenticated' => false,
+                'tenant' => null,
+                'domain_info' => $domainTenant ? [
+                    'name' => $domainTenant->name,
+                    'domain_name' => $domainTenant->domain_name,
+                    'currency' => $domainTenant->currency,
+                    'email' => $domainTenant->email,
+                ] : null,
+            ]);
+        }
 
         return response()->json([
-            'tenant' => $tenant ? $tenant->fresh() : null,
-            'authenticated' => (bool) $tenant,
+            'authenticated' => true,
+            'tenant' => $tenant->fresh(),
         ]);
     }
 
@@ -76,7 +138,7 @@ class AuthController extends Controller
     {
         $tenant = Auth::guard('web')->user();
 
-        if (! $tenant) {
+        if (!$tenant) {
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
@@ -85,7 +147,7 @@ class AuthController extends Controller
             'new_password' => 'required|string|min:6|confirmed',
         ]);
 
-        if (! Hash::check($validated['current_password'], $tenant->password)) {
+        if (!Hash::check($validated['current_password'], $tenant->password)) {
             return response()->json([
                 'errors' => ['current_password' => ['The provided current password does not match our records.']],
             ], 422);
@@ -145,7 +207,7 @@ class AuthController extends Controller
             ->where('email', $validated['email'])
             ->first();
 
-        if (! $record) {
+        if (!$record) {
             return response()->json([
                 'message' => 'Invalid or expired password reset token.',
             ], 422);
@@ -154,7 +216,7 @@ class AuthController extends Controller
         // Verify token (check plain or hash)
         $tokenValid = Hash::check($validated['token'], $record->token) || $validated['token'] === $record->token;
 
-        if (! $tokenValid) {
+        if (!$tokenValid) {
             return response()->json([
                 'message' => 'The provided reset token is incorrect.',
             ], 422);

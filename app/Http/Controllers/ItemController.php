@@ -12,8 +12,8 @@ class ItemController extends Controller
 {
     private function getCurrentTenant(): Tenant
     {
-        $tenant = request()->attributes->get('tenant')
-            ?? Auth::guard('web')->user()
+        $tenant = Auth::guard('web')->user()
+            ?? request()->attributes->get('tenant')
             ?? app(\App\Services\TenantManager::class)->resolveTenant(request());
 
         return $tenant;
