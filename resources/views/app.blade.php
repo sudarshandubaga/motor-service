@@ -35,11 +35,16 @@
             background: rgba(100, 116, 139, 0.9);
         }
 
+        /* Screen-mode hide print-only elements */
+        .print-only {
+            display: none !important;
+        }
+
         /* Standardized A4 Print Layout */
         @media print {
             @page {
                 size: A4 portrait;
-                margin: 10mm 12mm 10mm 12mm;
+                margin: 10mm 10mm 10mm 10mm;
             }
 
             html, body {
@@ -58,9 +63,43 @@
             /* Hide all regular app navigation & UI controls */
             header,
             nav,
-            main,
             .no-print {
                 display: none !important;
+            }
+
+            /* Reveal print-only elements */
+            .print-only {
+                display: block !important;
+            }
+
+            /* If print-modal-overlay is present (e.g. tax invoice modal), hide main document */
+            body:has(.print-modal-overlay) main,
+            .modal-open main {
+                display: none !important;
+            }
+
+            /* Allow main document to print smoothly when no modal is open */
+            main {
+                display: block !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow: visible !important;
+            }
+
+            /* Page-break and table layout controls for multi-page A4 print */
+            tr, .print-avoid-break {
+                break-inside: avoid !important;
+                page-break-inside: avoid !important;
+            }
+
+            thead {
+                display: table-header-group !important;
+            }
+
+            tfoot {
+                display: table-footer-group !important;
             }
 
             /* Reset React root & modal overlay to static document flow */
